@@ -10,7 +10,17 @@ from datetime import datetime
 from typing import Optional, Tuple
 from urllib.parse import urlparse
 
-from github import AppAuthentication, Auth, Github, GithubException
+import os
+import jwt
+import base64
+import jsonpickle
+import requests
+import shutil
+import subprocess
+from git import Repo
+from pr_agent.log import get_logger
+
+from github import AppAuthentication, Auth, Github, GithubException, GithubIntegration
 from retry import retry
 from starlette_context import context
 
@@ -27,12 +37,16 @@ from ..servers.utils import RateLimitExceeded
 from .git_provider import (MAX_FILES_ALLOWED_FULL, FilePatchInfo, GitProvider,
                            IncrementalPR)
 
+class MockContentFile:
+    def __init__(self, content_bytes):
+        self.decoded_content = content_bytes
 
 class GithubProvider(GitProvider):
     def __init__(self, pr_url: Optional[str] = None):
         self.repo_obj = None
         try:
             self.installation_id = context.get("installation_id", None)
+            #self.installation_id = 62537525
         except Exception:
             self.installation_id = None
         self.max_comment_chars = 65000
@@ -607,8 +621,143 @@ class GithubProvider(GitProvider):
 
     def get_issue_comments(self):
         return self.pr.get_issue_comments()
+    
+    def _get_github_token(self):
+        """Helper function to get a GitHub token (for REST API calls)."""
+        deployment_type = get_settings().get("GITHUB.DEPLOYMENT_TYPE", "user")
+        if deployment_type == 'app':
+            # For App authentication, we need to get the installation *from the client*.
+            #g = self._get_github_client()
+
+            #private_key = get_settings().github.private_key
+            private_key = base64.b64decode(get_settings().github.private_key).decode('utf-8')
+            app_id = get_settings().github.app_id
+
+            g = GithubIntegration(integration_id=app_id, private_key=private_key)
+
+            installations = g.get_installations()
+            
+            print(f"Found installations {jsonpickle.encode(installations)}")
+            
+            if installations.totalCount == 0:
+                print("Error: No installations found for this GitHub App.")
+                return ""
+            installation = installations[0] #type: ignore
+
+            # Get the installation access token.
+            access_token = g.get_access_token(self.installation_id)
+            return access_token.token
+            #return installation.get_access_token().token
+        elif deployment_type == 'user':
+            return get_settings().github.user_token
+        else:
+            raise ValueError("Invalid GITHUB.DEPLOYMENT_TYPE")
+
+    def generate_jwt(self):
+        app_id = get_settings().github.app_id
+        private_key = base64.b64decode(get_settings().github.private_key).decode('utf-8')
+
+        payload = {
+            "iat": int(time.time()),  # Issued at time
+            "exp": int(time.time()) + (10 * 60),  # JWT expiration time (10 minutes)
+            "iss": app_id,  # Issuer (your GitHub App ID)
+        }
+
+        jwt_instance = jwt.encode(payload, private_key, algorithm="RS256")
+        return jwt_instance
+
+    # --- 2. Get Installation Access Token ---
+    def get_installation_token(self, jwt_token):
+        url = f"https://api.github.com/app/installations/{self.installation_id}/access_tokens"
+        headers = {
+            "Authorization": f"Bearer {jwt_token}",
+            "Accept": "application/vnd.github.v3+json",
+        }
+        response = requests.post(url, headers=headers)
+        response.raise_for_status()  # Raise an exception for bad status codes
+        return response.json()["token"]
+
+
+    def _fetch_wiki_with_git(self) -> str:
+        """
+        Fetches the repository's wiki using Git, loads the files, and extracts the content of .pr_agent.toml.
+        Uses a Personal Access Token (PAT) for authentication.
+
+        Returns:
+            str: The content of the .pr_agent.toml file, or an empty string if not found or on error.
+        """
+        try:
+            WIKI_FILE_PATH = ".pr_agent.toml.md"  # Path to the wiki file within the cloned wiki
+
+            # --- 1. Generate JWT ---
+            jwt_token = self.generate_jwt()
+
+            # --- 2. Get Installation Access Token ---
+            installation_token = self.get_installation_token(jwt_token)
+
+            # --- 3. Clone the Wiki ---
+            local_wiki_path = "/tmp/temp_wiki"  # Local directory to clone the wiki into
+            repo_url = f"https://x-access-token:{installation_token}@github.com/{self.repo}.wiki.git"
+            Repo.clone_from(repo_url, local_wiki_path)
+
+            # --- 4. Load and Extract Content ---
+            full_path = os.path.join(local_wiki_path, WIKI_FILE_PATH)
+            if not os.path.exists(full_path):
+                get_logger().info(f"Wiki file not found: {full_path}")
+                return MockContentFile(b"")  # Return empty bytes
+
+            with open(full_path, "r", encoding="utf-8") as f:
+                wiki_file_content = f.read()
+
+            # --- 5. Extract TOML from Markdown (NEW) ---
+            # Search for a TOML code block within the Markdown
+            match = re.search(r"```(?:toml)?\s*([\s\S]*?)\s*```", wiki_file_content)
+            if match:
+                toml_content = match.group(1).strip()
+                toml_bytes = toml_content.encode("utf-8")  # Encode to bytes!
+                return MockContentFile(toml_bytes)
+            else:
+                get_logger().warning(f"No TOML block found in {WIKI_FILE_PATH}")
+                return ""    
+
+        except subprocess.CalledProcessError as e:
+            get_logger().error(f"Error cloning wiki repository: {e.stderr}")
+            return ""
+        except Exception as e:
+            get_logger().error(f"An unexpected error occurred: {e}")
+            return ""
+        finally:
+            # Clean up the temporary cloned wiki directory
+            shutil.rmtree(local_wiki_path, ignore_errors=True)        
+
+    def get_wiki_settings(self):
+        """
+        Fetches settings from .pr_agent.toml in the Wiki, using git clone.
+        """
+        wiki_settings = self._fetch_wiki_with_git()
+        get_logger().info("========================================================================================================")
+        get_logger().info("========================================================================================================")
+
+        get_logger().info(f"WIKI PAGES: {wiki_settings}")
+
+        get_logger().info("========================================================================================================")
+        get_logger().info("========================================================================================================")
+        return wiki_settings
 
     def get_repo_settings(self):
+        """
+        Fetches settings from .pr_agent.toml, prioritizing the Wiki version.
+        """
+        # First, try to get settings from the Wiki
+        wiki_settings = self.get_wiki_settings()
+        if wiki_settings and wiki_settings.decoded_content:  # Check for content
+            try:
+                return wiki_settings.decoded_content
+            except Exception as e:
+                get_logger().error(f"Failed to parse .pr_agent.toml from Wiki: {e}")
+                # Fallback to repo settings or defaults
+
+        # If Wiki settings are not found, try to get them from the repository root
         try:
             # contents = self.repo_obj.get_contents(".pr_agent.toml", ref=self.pr.head.sha).decoded_content
 
@@ -703,13 +852,19 @@ class GithubProvider(GitProvider):
         return repo_name, issue_number
 
     def _get_github_client(self):
+        get_logger().info(f"APP CONFIG SETTINGS LOAD: {jsonpickle.encode(get_settings().config)}")
+        get_logger().info("========================================================================================================")
+        get_logger().info("========================================================================================================")
+        get_logger().info(f"GITHUB CLIENT SETTINGS LOAD: {jsonpickle.encode(get_settings().github)}")
         deployment_type = get_settings().get("GITHUB.DEPLOYMENT_TYPE", "user")
 
         if deployment_type == 'app':
             try:
-                private_key = get_settings().github.private_key
+                #private_key = get_settings().github.private_key
+                private_key = base64.b64decode(get_settings().github.private_key).decode('utf-8')
                 app_id = get_settings().github.app_id
             except AttributeError as e:
+                get_logger().error(f"App Deployment Type Error: {e}")
                 raise ValueError("GitHub app ID and private key are required when using GitHub app deployment") from e
             if not self.installation_id:
                 raise ValueError("GitHub app installation ID is required when using GitHub app deployment")
@@ -721,6 +876,7 @@ class GithubProvider(GitProvider):
             try:
                 token = get_settings().github.user_token
             except AttributeError as e:
+                get_logger().error(f"User Deployment Type Error: {e}")
                 raise ValueError(
                     "GitHub token is required when using user deployment. See: "
                     "https://github.com/Codium-ai/pr-agent#method-2-run-from-source") from e

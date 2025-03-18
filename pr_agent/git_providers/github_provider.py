@@ -46,7 +46,7 @@ class GithubProvider(GitProvider):
         self.repo_obj = None
         try:
             self.installation_id = context.get("installation_id", None)
-            #self.installation_id = 62537525
+            # Installation ID is retrieved from context
         except Exception:
             self.installation_id = None
         self.max_comment_chars = 65000

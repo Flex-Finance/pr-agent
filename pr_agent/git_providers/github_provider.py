@@ -658,11 +658,11 @@ class GithubProvider(GitProvider):
         private_key = base64.b64decode(get_settings().github.private_key).decode('utf-8')
 
         payload = {
-            "iat": int(time.time()),  # Issued at time
-            "exp": int(time.time()) + (10 * 60),  # JWT expiration time (10 minutes)
-            "iss": app_id,  # Issuer (your GitHub App ID)
+            "iat": int(time.time()),
+            "exp": int(time.time()) + (10 * 60),
+            "iss": app_id,
+            "kid": get_settings().github.key_id,  # Add Key ID from settings
         }
-
         jwt_instance = jwt.encode(payload, private_key, algorithm="RS256")
         return jwt_instance
 

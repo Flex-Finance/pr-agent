@@ -728,7 +728,8 @@ class GithubProvider(GitProvider):
             return ""
         finally:
             # Clean up the temporary cloned wiki directory
-            shutil.rmtree(local_wiki_path, ignore_errors=True)        
+            if os.path.exists(local_wiki_path):
+               shutil.rmtree(local_wiki_path, ignore_errors=True)      
 
     def get_wiki_settings(self):
         """

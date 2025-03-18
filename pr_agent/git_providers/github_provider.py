@@ -46,7 +46,7 @@ class GithubProvider(GitProvider):
         self.repo_obj = None
         try:
             self.installation_id = context.get("installation_id", None)
-            #self.installation_id = 62537525
+            # Installation ID is retrieved from context
         except Exception:
             self.installation_id = None
         self.max_comment_chars = 65000
@@ -711,14 +711,7 @@ class GithubProvider(GitProvider):
 
             # --- 5. Extract TOML from Markdown (NEW) ---
             # Search for a TOML code block within the Markdown
-            match = re.search(r"```(?:toml)?\s*([\s\S]*?)\s*```", wiki_file_content)
-            if match:
-                toml_content = match.group(1).strip()
-                toml_bytes = toml_content.encode("utf-8")  # Encode to bytes!
-                return MockContentFile(toml_bytes)
-            else:
-                get_logger().warning(f"No TOML block found in {WIKI_FILE_PATH}")
-                return ""    
+            match = re.search(r"
 
         except subprocess.CalledProcessError as e:
             get_logger().error(f"Error cloning wiki repository: {e.stderr}")

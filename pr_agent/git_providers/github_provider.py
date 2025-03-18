@@ -711,7 +711,14 @@ class GithubProvider(GitProvider):
 
             # --- 5. Extract TOML from Markdown (NEW) ---
             # Search for a TOML code block within the Markdown
-            match = re.search(r"
+            match = re.search(r"```(?:toml)?\s*([\s\S]*?)\s*```", wiki_file_content)
+            if match:
+                toml_content = match.group(1).strip()
+                toml_bytes = toml_content.encode("utf-8")  # Encode to bytes!
+                return MockContentFile(toml_bytes)
+            else:
+                get_logger().warning(f"No TOML block found in {WIKI_FILE_PATH}")
+                return MockContentFile(b"")
 
         except subprocess.CalledProcessError as e:
             get_logger().error(f"Error cloning wiki repository: {e.stderr}")

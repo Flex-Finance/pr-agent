@@ -1,4 +1,5 @@
 from starlette_context import context
+from pr_agent.log import get_logger
 
 from pr_agent.config_loader import get_settings
 from pr_agent.git_providers.azuredevops_provider import AzureDevopsProvider
@@ -61,4 +62,5 @@ def get_git_provider_with_context(pr_url) -> GitProvider:
                 context["git_provider"] = {pr_url: git_provider}
             return git_provider
         except Exception as e:
+            get_logger().error(f"Get Git Provider Error: {e}")
             raise ValueError(f"Failed to get git provider for {pr_url}") from e

@@ -678,13 +678,13 @@ class GithubProvider(GitProvider):
         return response.json()["token"]
 
 
-    def _fetch_wiki_with_git(self) -> str:
+    def _fetch_wiki_with_git(self) -> MockContentFile:
         """
         Fetches the repository's wiki using Git, loads the files, and extracts the content of .pr_agent.toml.
         Uses a Personal Access Token (PAT) for authentication.
 
         Returns:
-            str: The content of the .pr_agent.toml file, or an empty string if not found or on error.
+            MockContentFile: A MockContentFile containing the content of the .pr_agent.toml file, or empty content if not found or on error.
         """
         try:
             WIKI_FILE_PATH = ".pr_agent.toml.md"  # Path to the wiki file within the cloned wiki

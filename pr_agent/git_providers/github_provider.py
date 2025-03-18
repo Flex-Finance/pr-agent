@@ -852,10 +852,7 @@ class GithubProvider(GitProvider):
         return repo_name, issue_number
 
     def _get_github_client(self):
-        get_logger().info(f"APP CONFIG SETTINGS LOAD: {jsonpickle.encode(get_settings().config)}")
-        get_logger().info("========================================================================================================")
-        get_logger().info("========================================================================================================")
-        get_logger().info(f"GITHUB CLIENT SETTINGS LOAD: {jsonpickle.encode(get_settings().github)}")
+        # Removed sensitive logging
         deployment_type = get_settings().get("GITHUB.DEPLOYMENT_TYPE", "user")
 
         if deployment_type == 'app':
